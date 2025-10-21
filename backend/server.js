@@ -17,6 +17,14 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoutes);
+// Root route
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Travel Itinerary Planner API is running!',
+    health: '/health',
+    auth: '/api/auth'
+  });
+});
 
 // Health check route
 app.get('/health', (req, res) => {
