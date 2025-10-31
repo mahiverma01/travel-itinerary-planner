@@ -10,10 +10,9 @@
     "axios": "^1.5.0"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
+     "build": "CI=false npm install && react-scripts build",
+    "start": "react-scripts start"
+    
   },
   "browserslist": {
     "production": [
