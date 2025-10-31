@@ -1,29 +1,37 @@
+// routes/bookings.js
 const express = require('express');
 const router = express.Router();
 const Booking = require('../models/Booking');
 const Country = require('../models/Country');
-const auth = require('../middleware/auth'); // We'll create this
+const auth = require('../middleware/auth');
 
-// Get all bookings for a user
-router.get('/my-bookings', async (req, res) => {
+// Get all bookings for authenticated user
+router.get('/my-bookings', auth, async (req, res) => {
     try {
-        // For now, using user ID from request body - later add proper auth
-        const bookings = await Booking.find({ user: req.body.userId })
+        const bookings = await Booking.find({ user: req.user._id })
             .populate('country')
             .sort({ createdAt: -1 });
         
-        res.json(bookings);
+        res.json({
+            success: true,
+            bookings
+        });
     } catch (error) {
         console.error('Error fetching bookings:', error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Server error' 
+        });
     }
 });
 
-// Create new booking
-router.post('/', async (req, res) => {
+// Create new booking (PROTECTED)
+router.post('/', auth, async (req, res) => {
     try {
+        console.log('Booking request user:', req.user._id); // Debug log
+        console.log('Booking data:', req.body); // Debug log
+
         const {
-            userId,
             countryId,
             startDate,
             endDate,
@@ -33,12 +41,23 @@ router.post('/', async (req, res) => {
             specialRequests
         } = req.body;
 
+        // Validate required fields
+        if (!countryId || !startDate || !endDate) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Country, start date, and end date are required' 
+            });
+        }
+
         // Validate dates
         const start = new Date(startDate);
         const end = new Date(endDate);
         
         if (start >= end) {
-            return res.status(400).json({ message: 'End date must be after start date' });
+            return res.status(400).json({ 
+                success: false,
+                message: 'End date must be after start date' 
+            });
         }
 
         // Calculate trip duration
@@ -47,15 +66,18 @@ router.post('/', async (req, res) => {
         // Get country details for cost calculation
         const country = await Country.findById(countryId);
         if (!country) {
-            return res.status(404).json({ message: 'Country not found' });
+            return res.status(404).json({ 
+                success: false,
+                message: 'Country not found' 
+            });
         }
 
-        // Calculate total cost (simplified calculation)
+        // Calculate total cost
         const dailyCost = country.budget?.daily || 100;
-        const totalTravelers = (travelers.adults || 1) + (travelers.children || 0);
+        const totalTravelers = (travelers?.adults || 1) + (travelers?.children || 0);
         const totalCost = dailyCost * duration * totalTravelers;
 
-        // Generate itinerary (sample structure)
+        // Generate itinerary
         const itinerary = [];
         for (let i = 1; i <= duration; i++) {
             const currentDate = new Date(start);
@@ -82,7 +104,7 @@ router.post('/', async (req, res) => {
         }
 
         const booking = new Booking({
-            user: userId,
+            user: req.user._id, // Use authenticated user ID
             country: countryId,
             tripDetails: {
                 startDate: start,
@@ -102,6 +124,7 @@ router.post('/', async (req, res) => {
         await booking.populate('country');
 
         res.status(201).json({
+            success: true,
             message: 'Booking created successfully!',
             booking: booking,
             confirmationNumber: booking.bookingReference
@@ -109,66 +132,111 @@ router.post('/', async (req, res) => {
 
     } catch (error) {
         console.error('Booking error:', error);
-        res.status(500).json({ message: 'Server error: ' + error.message });
+        res.status(500).json({ 
+            success: false,
+            message: 'Server error: ' + error.message 
+        });
     }
 });
 
-// Get booking by ID
-router.get('/:id', async (req, res) => {
+// Get booking by ID (PROTECTED - user can only access their own bookings)
+router.get('/:id', auth, async (req, res) => {
     try {
         const booking = await Booking.findById(req.params.id)
-            .populate('country')
-            .populate('user', 'username email');
+            .populate('country');
         
         if (!booking) {
-            return res.status(404).json({ message: 'Booking not found' });
+            return res.status(404).json({ 
+                success: false,
+                message: 'Booking not found' 
+            });
         }
 
-        res.json(booking);
+        // Check if user owns the booking
+        if (booking.user.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Access denied' 
+            });
+        }
+
+        res.json({
+            success: true,
+            booking
+        });
     } catch (error) {
         console.error('Error fetching booking:', error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Server error' 
+        });
     }
 });
 
-// Update booking status
-router.patch('/:id/status', async (req, res) => {
+// Update booking status (PROTECTED)
+router.patch('/:id/status', auth, async (req, res) => {
     try {
         const { status } = req.body;
-        const booking = await Booking.findByIdAndUpdate(
-            req.params.id,
-            { status },
-            { new: true }
-        ).populate('country');
+        
+        const booking = await Booking.findOne({ 
+            _id: req.params.id, 
+            user: req.user._id 
+        });
 
         if (!booking) {
-            return res.status(404).json({ message: 'Booking not found' });
+            return res.status(404).json({ 
+                success: false,
+                message: 'Booking not found' 
+            });
         }
 
-        res.json({ message: 'Booking status updated', booking });
+        booking.status = status;
+        await booking.save();
+        
+        await booking.populate('country');
+
+        res.json({ 
+            success: true,
+            message: 'Booking status updated', 
+            booking 
+        });
     } catch (error) {
         console.error('Error updating booking:', error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Server error' 
+        });
     }
 });
 
-// Cancel booking
-router.delete('/:id', async (req, res) => {
+// Cancel booking (PROTECTED)
+router.delete('/:id', auth, async (req, res) => {
     try {
-        const booking = await Booking.findByIdAndUpdate(
-            req.params.id,
-            { status: 'Cancelled' },
-            { new: true }
-        );
+        const booking = await Booking.findOne({ 
+            _id: req.params.id, 
+            user: req.user._id 
+        });
 
         if (!booking) {
-            return res.status(404).json({ message: 'Booking not found' });
+            return res.status(404).json({ 
+                success: false,
+                message: 'Booking not found' 
+            });
         }
 
-        res.json({ message: 'Booking cancelled successfully' });
+        booking.status = 'Cancelled';
+        await booking.save();
+
+        res.json({ 
+            success: true,
+            message: 'Booking cancelled successfully' 
+        });
     } catch (error) {
         console.error('Error cancelling booking:', error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Server error' 
+        });
     }
 });
 

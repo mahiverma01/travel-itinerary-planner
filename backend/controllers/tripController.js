@@ -41,12 +41,41 @@ const costData = {
       activities: { perDay: 60, type: 'perDay' },
       miscellaneous: { total: 250, type: 'fixed' }
     }
+  },
+  // Add more default destinations
+  italy: {
+    currency: 'EUR',
+    categories: {
+      accommodation: { perNight: 100, type: 'perNight' },
+      food: { perDay: 50, type: 'perDay' },
+      transport: { total: 250, type: 'fixed' },
+      activities: { perDay: 35, type: 'perDay' },
+      miscellaneous: { total: 150, type: 'fixed' }
+    }
+  },
+  spain: {
+    currency: 'EUR',
+    categories: {
+      accommodation: { perNight: 80, type: 'perNight' },
+      food: { perDay: 40, type: 'perDay' },
+      transport: { total: 200, type: 'fixed' },
+      activities: { perDay: 30, type: 'perDay' },
+      miscellaneous: { total: 120, type: 'fixed' }
+    }
   }
 };
 
 // Calculate budget function
 const calculateBudget = (destination, duration, travelers) => {
-  const destinationKey = destination.toLowerCase();
+  if (!destination || !duration || !travelers) {
+    return {
+      currency: 'USD',
+      total: 0,
+      categories: []
+    };
+  }
+
+  const destinationKey = destination.toLowerCase().replace(/\s+/g, '');
   const data = costData[destinationKey] || costData.france;
   
   const breakdown = {
@@ -98,46 +127,65 @@ const calculateBudget = (destination, duration, travelers) => {
   return breakdown;
 };
 
-// Create new trip
+// Create new trip - FIXED VERSION
 exports.createTrip = async (req, res) => {
   try {
-    const { destination, startDate, endDate, travelers, accommodation, specialRequests } = req.body;
-    
-    // Calculate trip duration
+    console.log('Received trip data:', req.body); // Debug log
+    console.log('User ID:', req.user.id); // Debug log
+
+    const { 
+      title, 
+      destinations, 
+      budget, 
+      notes, 
+      startDate, 
+      endDate,
+      travelers 
+    } = req.body;
+
+    // Validation - UPDATED
+    if (!title || !startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Title, start date, and end date are required'
+      });
+    }
+
+    // Calculate duration
     const start = new Date(startDate);
     const end = new Date(endDate);
     const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-    
-    // Calculate budget
-    const budgetEstimate = calculateBudget(destination, duration, travelers);
-    
+
+    // Calculate budget if destination provided
+    let budgetEstimate = budget;
+    if (destinations && destinations.length > 0 && travelers) {
+      const mainDestination = destinations[0].name || destinations[0];
+      budgetEstimate = calculateBudget(mainDestination, duration, travelers);
+    }
+
     const trip = new Trip({
-      user: req.userId,
-      destination,
+      user: req.user.id, // CHANGED from req.userId to req.user.id
+      title,
+      destinations: destinations || [],
+      budget: budgetEstimate || budget || { total: 0, currency: 'USD' },
+      notes: notes || '',
       startDate,
       endDate,
-      travelers,
-      accommodation,
-      specialRequests,
-      budgetEstimate,
-      costData: {
-        destination,
-        duration,
-        travelers
-      }
+      travelers: travelers || { adults: 1, children: 0 },
+      duration
     });
 
     await trip.save();
     
-    // Populate user details if needed
-    await trip.populate('user', 'name email');
-    
+    console.log('Trip saved successfully:', trip._id);
+
     res.status(201).json({
       success: true,
       message: 'Trip created successfully',
       trip
     });
   } catch (error) {
+    console.error('Create trip error:', error);
     res.status(500).json({
       success: false,
       message: 'Error creating trip',
@@ -146,12 +194,11 @@ exports.createTrip = async (req, res) => {
   }
 };
 
-// Get all trips for a user
+// Get all trips for a user - FIXED
 exports.getUserTrips = async (req, res) => {
   try {
-    const trips = await Trip.find({ user: req.userId })
-      .sort({ createdAt: -1 })
-      .populate('user', 'name email');
+    const trips = await Trip.find({ user: req.user.id }) // CHANGED to req.user.id
+      .sort({ createdAt: -1 });
     
     res.json({
       success: true,
@@ -166,11 +213,10 @@ exports.getUserTrips = async (req, res) => {
   }
 };
 
-// Get single trip
+// Get single trip - FIXED
 exports.getTrip = async (req, res) => {
   try {
-    const trip = await Trip.findById(req.params.id)
-      .populate('user', 'name email');
+    const trip = await Trip.findById(req.params.id);
     
     if (!trip) {
       return res.status(404).json({
@@ -180,7 +226,7 @@ exports.getTrip = async (req, res) => {
     }
     
     // Check if user owns the trip
-    if (trip.user._id.toString() !== req.userId) {
+    if (trip.user.toString() !== req.user.id) { // CHANGED to req.user.id
       return res.status(403).json({
         success: false,
         message: 'Access denied'
@@ -200,7 +246,7 @@ exports.getTrip = async (req, res) => {
   }
 };
 
-// Update trip
+// Update trip - FIXED
 exports.updateTrip = async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id);
@@ -213,36 +259,18 @@ exports.updateTrip = async (req, res) => {
     }
     
     // Check if user owns the trip
-    if (trip.user.toString() !== req.userId) {
+    if (trip.user.toString() !== req.user.id) { // CHANGED to req.user.id
       return res.status(403).json({
         success: false,
         message: 'Access denied'
       });
     }
     
-    // Recalculate budget if destination, dates, or travelers change
-    if (req.body.destination || req.body.startDate || req.body.endDate || req.body.travelers) {
-      const destination = req.body.destination || trip.destination;
-      const startDate = req.body.startDate ? new Date(req.body.startDate) : trip.startDate;
-      const endDate = req.body.endDate ? new Date(req.body.endDate) : trip.endDate;
-      const travelers = req.body.travelers || trip.travelers;
-      
-      const duration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
-      const budgetEstimate = calculateBudget(destination, duration, travelers);
-      
-      req.body.budgetEstimate = budgetEstimate;
-      req.body.costData = {
-        destination,
-        duration,
-        travelers
-      };
-    }
-    
     const updatedTrip = await Trip.findByIdAndUpdate(
       req.params.id,
       req.body,
       { new: true, runValidators: true }
-    ).populate('user', 'name email');
+    );
     
     res.json({
       success: true,
@@ -258,7 +286,7 @@ exports.updateTrip = async (req, res) => {
   }
 };
 
-// Delete trip
+// Delete trip - FIXED
 exports.deleteTrip = async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id);
@@ -271,7 +299,7 @@ exports.deleteTrip = async (req, res) => {
     }
     
     // Check if user owns the trip
-    if (trip.user.toString() !== req.userId) {
+    if (trip.user.toString() !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'
@@ -288,6 +316,33 @@ exports.deleteTrip = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error deleting trip',
+      error: error.message
+    });
+  }
+};
+
+// Get budget estimate (optional helper endpoint)
+exports.getBudgetEstimate = async (req, res) => {
+  try {
+    const { destination, duration, travelers } = req.body;
+    
+    if (!destination || !duration || !travelers) {
+      return res.status(400).json({
+        success: false,
+        message: 'Destination, duration, and travelers are required'
+      });
+    }
+
+    const budgetEstimate = calculateBudget(destination, duration, travelers);
+    
+    res.json({
+      success: true,
+      budgetEstimate
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error calculating budget',
       error: error.message
     });
   }

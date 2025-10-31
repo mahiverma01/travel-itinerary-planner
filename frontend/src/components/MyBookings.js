@@ -4,47 +4,67 @@ import { Link } from 'react-router-dom';
 import './MyBookings.css';
 
 const MyBookings = () => {
-    const { currentUser } = useAuth();
+    const { currentUser, token } = useAuth(); // Added token
     const [bookings, setBookings] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
 
     useEffect(() => {
-        if (currentUser) {
+        if (currentUser && token) {
             fetchBookings();
         }
-    }, [currentUser]);
+    }, [currentUser, token]);
 
     const fetchBookings = async () => {
         try {
+            setLoading(true);
             const response = await fetch('http://localhost:5000/api/bookings/my-bookings', {
-                method: 'POST',
+                method: 'GET', // CHANGED from POST to GET
                 headers: {
                     'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ userId: currentUser.userId })
+                    'Authorization': `Bearer ${token}` // ADDED authorization header
+                }
+                // REMOVED: body: JSON.stringify({ userId: currentUser.userId })
             });
             
+            if (!response.ok) {
+                throw new Error('Failed to fetch bookings');
+            }
+            
             const data = await response.json();
-            setBookings(data);
-            setLoading(false);
+            
+            if (data.success) {
+                setBookings(data.bookings || []); // CHANGED: data.bookings instead of just data
+            } else {
+                setBookings([]);
+            }
+            
         } catch (error) {
             console.error('Error fetching bookings:', error);
+            setError('Failed to load bookings');
+            setBookings([]);
+        } finally {
             setLoading(false);
         }
     };
 
     const getStatusBadge = (status) => {
         const statusClasses = {
-            'Pending': 'status-pending',
-            'Confirmed': 'status-confirmed',
-            'Cancelled': 'status-cancelled',
-            'Completed': 'status-completed'
+            'pending': 'status-pending',
+            'confirmed': 'status-confirmed',
+            'cancelled': 'status-cancelled',
+            'completed': 'status-completed'
         };
         
-        return <span className={`status-badge ${statusClasses[status]}`}>{status}</span>;
+        const displayStatus = status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Pending';
+        
+        return <span className={`status-badge ${statusClasses[status] || 'status-pending'}`}>
+            {displayStatus}
+        </span>;
     };
 
     const formatDate = (dateString) => {
+        if (!dateString) return 'N/A';
         return new Date(dateString).toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'long',
@@ -53,7 +73,22 @@ const MyBookings = () => {
     };
 
     if (loading) {
-        return <div className="loading">Loading your bookings...</div>;
+        return (
+            <div className="my-bookings-container">
+                <div className="loading">Loading your bookings...</div>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="my-bookings-container">
+                <div className="error-message">{error}</div>
+                <button onClick={fetchBookings} className="retry-btn">
+                    Try Again
+                </button>
+            </div>
+        );
     }
 
     return (
@@ -77,9 +112,9 @@ const MyBookings = () => {
                         <div key={booking._id} className="booking-card">
                             <div className="booking-header">
                                 <div className="booking-info">
-                                    <h3>{booking.country?.name}</h3>
+                                    <h3>{booking.trip?.title || 'Unnamed Trip'}</h3>
                                     <p className="booking-ref">
-                                        Reference: {booking.bookingReference}
+                                        Reference: {booking.bookingReference || 'N/A'}
                                     </p>
                                 </div>
                                 {getStatusBadge(booking.status)}
@@ -87,25 +122,27 @@ const MyBookings = () => {
 
                             <div className="booking-details">
                                 <div className="detail-group">
-                                    <strong>Dates:</strong>
+                                    <strong>Booking Date:</strong>
+                                    <span>{formatDate(booking.bookingDate)}</span>
+                                </div>
+                                <div className="detail-group">
+                                    <strong>Trip Dates:</strong>
                                     <span>
-                                        {formatDate(booking.tripDetails.startDate)} - {formatDate(booking.tripDetails.endDate)}
+                                        {formatDate(booking.trip?.startDate)} - {formatDate(booking.trip?.endDate)}
                                     </span>
                                 </div>
                                 <div className="detail-group">
                                     <strong>Travelers:</strong>
                                     <span>
-                                        {booking.tripDetails.travelers.adults} Adult(s), 
-                                        {booking.tripDetails.travelers.children} Child(ren)
+                                        {booking.travelerDetails ? 
+                                            `${booking.travelerDetails.firstName} ${booking.travelerDetails.lastName}` 
+                                            : 'Not specified'
+                                        }
                                     </span>
                                 </div>
                                 <div className="detail-group">
-                                    <strong>Accommodation:</strong>
-                                    <span>{booking.tripDetails.accommodation}</span>
-                                </div>
-                                <div className="detail-group">
-                                    <strong>Total Cost:</strong>
-                                    <span className="cost">${booking.totalCost}</span>
+                                    <strong>Total Amount:</strong>
+                                    <span className="cost">${booking.totalAmount || booking.trip?.budget?.total || 0}</span>
                                 </div>
                             </div>
 
@@ -116,7 +153,7 @@ const MyBookings = () => {
                                 >
                                     View Details
                                 </Link>
-                                {booking.status === 'Pending' && (
+                                {booking.status === 'pending' && (
                                     <button className="cancel-btn">
                                         Cancel Booking
                                     </button>
